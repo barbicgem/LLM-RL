@@ -1,18 +1,26 @@
 from typing import Optional
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 
 def load_model_and_tokenizer(model_id: str, device: str = "cuda"):
     tokenizer = AutoTokenizer.from_pretrained(model_id)
+    bnb_config = BitsAndBytesConfig(load_in_8bit=True)
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
-        load_in_8bit=True,
+        quantization_config=bnb_config,
         device_map="auto",
     )
     model.eval()
     return model, tokenizer
+
+
+def _get_layer(model, layer: int):
+    # Gemma-3 loads as Gemma3ForConditionalGeneration with a nested language_model
+    if hasattr(model, "language_model"):
+        return model.language_model.model.layers[layer]
+    return model.model.layers[layer]
 
 
 def get_story_activation(
@@ -25,7 +33,7 @@ def get_story_activation(
 ) -> Optional[torch.Tensor]:
     """
     Returns the mean float32 residual-stream vector across all token positions
-    from token_offset onward, captured at the output of model.model.layers[layer].
+    from token_offset onward, captured at the output of the transformer layer.
 
     Returns None if the text tokenizes to fewer tokens than token_offset.
     """
@@ -40,7 +48,7 @@ def get_story_activation(
         hidden = output[0][0, token_offset:, :].detach().float()
         captured.append(hidden.mean(dim=0).cpu())
 
-    handle = model.model.layers[layer].register_forward_hook(_hook)
+    handle = _get_layer(model, layer).register_forward_hook(_hook)
     with torch.no_grad():
         model(**inputs)
     handle.remove()

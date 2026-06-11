@@ -30,7 +30,7 @@ from emotion_validation.config import (
     TOPICS,
 )
 
-MAX_NEW_TOKENS = 800
+MAX_NEW_TOKENS = 2000
 
 # ---------------------------------------------------------------------------
 # Prompts — verbatim from the paper appendix
@@ -217,7 +217,7 @@ def main() -> None:
         quantization="bitsandbytes",
         load_format="bitsandbytes",
         gpu_memory_utilization=0.90,
-        max_model_len=2048,
+        max_model_len=4096,
         enforce_eager=True,
     )
     sampling_params = SamplingParams(temperature=0.8, max_tokens=MAX_NEW_TOKENS)

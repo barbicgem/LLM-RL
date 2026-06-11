@@ -16,11 +16,10 @@ Resume-safe: already-completed topic indices are skipped on re-run.
 import argparse
 import json
 import re
-import sys
 from pathlib import Path
 
-from tqdm import tqdm
-from transformers import BitsAndBytesConfig, pipeline
+from transformers import AutoTokenizer
+from vllm import LLM, SamplingParams
 
 from emotion_validation.config import (
     EMOTIONS,
@@ -31,9 +30,10 @@ from emotion_validation.config import (
     TOPICS,
 )
 
+MAX_NEW_TOKENS = 800
+
 # ---------------------------------------------------------------------------
-# Prompts — from https://transformer-circuits.pub/2026/emotions/index.html#appendix-validate-causal
-# Sofroniew et al., "Emotion Concepts and their Function in a Large Language Model", Transformer Circuits, 2026.
+# Prompts — verbatim from the paper appendix
 # ---------------------------------------------------------------------------
 
 _STORY_PROMPT = """\
@@ -118,22 +118,18 @@ CRITICAL REQUIREMENT: These dialogues must be completely neutral and emotionless
 - Focus purely on information exchange and task completion"""
 
 
-BATCH_SIZE = 4
-MAX_NEW_TOKENS = 800
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _call_batch(pipe, prompts: list[str]) -> list[str]:
-    """Run a batch of prompts through the pipeline, return list of response strings."""
-    batch = [[{"role": "user", "content": p}] for p in prompts]
-    results = pipe(batch, max_new_tokens=MAX_NEW_TOKENS, do_sample=True, temperature=0.8)
-    return [r[0]["generated_text"][-1]["content"] for r in results]
+def _format_prompt(tokenizer, prompt_text: str) -> str:
+    messages = [{"role": "user", "content": prompt_text}]
+    return tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
 
 
 def _parse_items(text: str, tag: str) -> list[str]:
-    """Split on [story N] or [dialogue N] markers; return non-empty chunks."""
     parts = re.split(rf'\[{tag}\s*\d+\]', text, flags=re.IGNORECASE)
     return [p.strip() for p in parts if p.strip()]
 
@@ -155,7 +151,7 @@ def _done_indices(path: Path) -> set[int]:
 # Main
 # ---------------------------------------------------------------------------
 
-def run_stories(pipe, emotions: list[str], n: int) -> None:
+def run_stories(llm, tokenizer, sampling_params, emotions: list[str], n: int) -> None:
     STORIES_DIR.mkdir(parents=True, exist_ok=True)
     for emotion in emotions:
         out_path = STORIES_DIR / f"{emotion}.jsonl"
@@ -164,23 +160,23 @@ def run_stories(pipe, emotions: list[str], n: int) -> None:
         if not remaining:
             print(f"  {emotion}: already complete")
             continue
+
+        prompts = [
+            _format_prompt(tokenizer, _STORY_PROMPT.format(n=n, topic=topic, emotion=emotion))
+            for _, topic in remaining
+        ]
+
+        print(f"  {emotion}: generating {len(prompts)} topics …")
+        outputs = llm.generate(prompts, sampling_params)
+
         with open(out_path, "a") as f:
-            batches = [remaining[i:i + BATCH_SIZE] for i in range(0, len(remaining), BATCH_SIZE)]
-            for batch in tqdm(batches, desc=f"stories/{emotion}"):
-                prompts = [_STORY_PROMPT.format(n=n, topic=topic, emotion=emotion)
-                           for _, topic in batch]
-                try:
-                    responses = _call_batch(pipe, prompts)
-                    for (topic_idx, topic), response in zip(batch, responses):
-                        items = _parse_items(response, "story")
-                        f.write(json.dumps({"topic_idx": topic_idx, "topic": topic, "items": items}) + "\n")
-                    f.flush()
-                except Exception as e:
-                    for topic_idx, _ in batch:
-                        print(f"\n  [warn] {emotion} topic {topic_idx}: {e}", file=sys.stderr)
+            for (topic_idx, topic), output in zip(remaining, outputs):
+                items = _parse_items(output.outputs[0].text, "story")
+                f.write(json.dumps({"topic_idx": topic_idx, "topic": topic, "items": items}) + "\n")
+        print(f"  {emotion}: done ({len(remaining)} topics saved)")
 
 
-def run_neutral(pipe, n: int) -> None:
+def run_neutral(llm, tokenizer, sampling_params, n: int) -> None:
     NEUTRAL_DIR.mkdir(parents=True, exist_ok=True)
     out_path = NEUTRAL_DIR / "neutral.jsonl"
     done = _done_indices(out_path)
@@ -188,47 +184,50 @@ def run_neutral(pipe, n: int) -> None:
     if not remaining:
         print("  neutral: already complete")
         return
+
+    prompts = [
+        _format_prompt(tokenizer, _NEUTRAL_PROMPT.format(n=n, topic=topic))
+        for _, topic in remaining
+    ]
+
+    print(f"  neutral: generating {len(prompts)} topics …")
+    outputs = llm.generate(prompts, sampling_params)
+
     with open(out_path, "a") as f:
-        batches = [remaining[i:i + BATCH_SIZE] for i in range(0, len(remaining), BATCH_SIZE)]
-        for batch in tqdm(batches, desc="neutral"):
-            prompts = [_NEUTRAL_PROMPT.format(n=n, topic=topic) for _, topic in batch]
-            try:
-                responses = _call_batch(pipe, prompts)
-                for (topic_idx, topic), response in zip(batch, responses):
-                    items = _parse_items(response, "dialogue")
-                    items = [d.replace("Person:", "Human:").replace("\nAI:", "\nAssistant:") for d in items]
-                    f.write(json.dumps({"topic_idx": topic_idx, "topic": topic, "items": items}) + "\n")
-                f.flush()
-            except Exception as e:
-                for topic_idx, _ in batch:
-                    print(f"\n  [warn] neutral topic {topic_idx}: {e}", file=sys.stderr)
+        for (topic_idx, topic), output in zip(remaining, outputs):
+            items = _parse_items(output.outputs[0].text, "dialogue")
+            items = [d.replace("Person:", "Human:").replace("\nAI:", "\nAssistant:") for d in items]
+            f.write(json.dumps({"topic_idx": topic_idx, "topic": topic, "items": items}) + "\n")
+    print(f"  neutral: done ({len(remaining)} topics saved)")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["stories", "neutral", "all"], default="all")
-    parser.add_argument("--emotions", nargs="+", default=EMOTIONS,
-                        help="Subset of emotions to generate (default: all 12)")
-    parser.add_argument("--n", type=int, default=N_STORIES_PER_TOPIC,
-                        help="Stories per topic (default: from config)")
-    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--emotions", nargs="+", default=EMOTIONS)
+    parser.add_argument("--n", type=int, default=N_STORIES_PER_TOPIC)
     args = parser.parse_args()
 
-    print(f"Loading {MODEL_ID} on {args.device}")
-    pipe = pipeline(
-        "text-generation",
+    print(f"Loading tokenizer …")
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+
+    print(f"Loading {MODEL_ID} with vLLM (8-bit) …")
+    llm = LLM(
         model=MODEL_ID,
-        model_kwargs={"quantization_config": BitsAndBytesConfig(load_in_8bit=True)},
-        device_map="auto",
+        quantization="bitsandbytes",
+        load_format="bitsandbytes",
+        gpu_memory_utilization=0.90,
+        max_model_len=2048,
     )
+    sampling_params = SamplingParams(temperature=0.8, max_tokens=MAX_NEW_TOKENS)
 
     if args.mode in ("stories", "all"):
         print(f"\nGenerating emotional stories ({args.emotions}, {args.n}/topic)")
-        run_stories(pipe, args.emotions, args.n)
+        run_stories(llm, tokenizer, sampling_params, args.emotions, args.n)
 
     if args.mode in ("neutral", "all"):
         print(f"\nGenerating neutral dialogues ({args.n}/topic)")
-        run_neutral(pipe, args.n)
+        run_neutral(llm, tokenizer, sampling_params, args.n)
 
     print("\nDone.")
 

@@ -2,9 +2,9 @@
 SAE-based validation of emotion vectors.
 
 For each emotion vector, finds the SAE decoder features (Gemma Scope 2,
-layer TARGET_LAYER) with the highest cosine similarity. If the emotion
-directions are semantically meaningful, top features should cluster around
-the corresponding emotion concept.
+layer TARGET_LAYER, residual stream post) with the highest cosine similarity.
+If the emotion directions are semantically meaningful, top features should
+cluster around the corresponding emotion concept.
 
 Outputs
 -------
@@ -13,26 +13,27 @@ matrix. Saves raw results to data/vectors/sae_alignment_layer{N}.json.
 
 Usage
 -----
-    python validate_sae.py [--layer 30] [--top-k 10] [--device cuda]
+    python validate_sae.py [--layer 30] [--top-k 10] [--width 16k]
+                           [--variant l0_big]
 
 Prerequisites
 -------------
 - emotion_vectors_layer{N}.npz must exist (run extract_vectors.py first)
-- Verify SAE_RELEASE in emotion_validation/config.py against
-  https://huggingface.co/collections/google/gemma-scope-2
 """
 
 import argparse
 import json
 
 import numpy as np
-import torch
-from sae_lens import SAE
+from huggingface_hub import hf_hub_download
+from safetensors import safe_open
 
 from emotion_validation.config import (
     EMOTIONS,
-    SAE_ID,
-    SAE_RELEASE,
+    SAE_HF_REPO,
+    SAE_HOOK,
+    SAE_VARIANT,
+    SAE_WIDTH,
     TARGET_LAYER,
     VECTORS_DIR,
 )
@@ -44,6 +45,25 @@ def load_emotion_vectors(layer: int) -> dict[str, np.ndarray]:
         raise SystemExit(f"Vectors not found at {path}. Run extract_vectors.py first.")
     data = np.load(path)
     return {e: data[e] for e in data.files}
+
+
+def load_sae_decoder(repo_id: str, hook: str, layer: int, width: str, variant: str) -> tuple[np.ndarray, dict]:
+    subfolder = f"{hook}/layer_{layer}_width_{width}_{variant}"
+
+    cfg_path = hf_hub_download(repo_id=repo_id, filename=f"{subfolder}/config.json")
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+
+    params_path = hf_hub_download(repo_id=repo_id, filename=f"{subfolder}/params.safetensors")
+
+    with safe_open(params_path, framework="pt", device="cpu") as f:
+        keys = list(f.keys())
+        w_dec_key = next((k for k in keys if k.endswith("W_dec") or k == "W_dec"), None)
+        if w_dec_key is None:
+            raise ValueError(f"W_dec not found in safetensors. Available keys: {keys[:20]}")
+        W_dec = f.get_tensor(w_dec_key).float().numpy()   # (n_features, d_model)
+
+    return W_dec, cfg
 
 
 def top_features(
@@ -77,29 +97,22 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--layer", type=int, default=TARGET_LAYER)
     parser.add_argument("--top-k", type=int, default=10)
-    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--width", default=SAE_WIDTH)
+    parser.add_argument("--variant", default=SAE_VARIANT)
     args = parser.parse_args()
 
-    # ------------------------------------------------------------------
-    # Load emotion vectors
-    # ------------------------------------------------------------------
     print(f"Loading emotion vectors (layer {args.layer}) …")
     emotion_vectors = load_emotion_vectors(args.layer)
     print(f"  {len(emotion_vectors)} emotions loaded")
 
-    # ------------------------------------------------------------------
-    # Load SAE decoder weights
-    # ------------------------------------------------------------------
-    print(f"\nLoading SAE: {SAE_RELEASE} / {SAE_ID} …")
-    sae, _, _ = SAE.from_pretrained(SAE_RELEASE, SAE_ID, device=args.device)
-
-    W_dec = sae.W_dec.detach().float().cpu().numpy()   # (n_features, d_model)
+    print(f"\nLoading SAE from {SAE_HF_REPO} …")
+    print(f"  {SAE_HOOK}/layer_{args.layer}_width_{args.width}_{args.variant}")
+    W_dec, _ = load_sae_decoder(
+        SAE_HF_REPO, SAE_HOOK, args.layer, args.width, args.variant
+    )
     W_dec_norm = W_dec / (np.linalg.norm(W_dec, axis=1, keepdims=True) + 1e-8)
     print(f"  SAE decoder: {W_dec.shape[0]} features × {W_dec.shape[1]} dims")
 
-    # ------------------------------------------------------------------
-    # Top-k aligned features per emotion
-    # ------------------------------------------------------------------
     print(f"\n{'='*60}")
     print(f"Top-{args.top_k} SAE features per emotion (cosine similarity)")
     print(f"{'='*60}")
@@ -112,9 +125,6 @@ def main() -> None:
         for rank, (feat_idx, sim) in enumerate(results[emotion], 1):
             print(f"  {rank:2d}.  feature {feat_idx:6d}   cos_sim={sim:+.4f}")
 
-    # ------------------------------------------------------------------
-    # Cross-emotion cosine similarity matrix
-    # ------------------------------------------------------------------
     print(f"\n{'='*60}")
     print("Cross-emotion cosine similarity matrix")
     print(f"{'='*60}")
@@ -125,9 +135,6 @@ def main() -> None:
         row = f"{n:12s}  " + "  ".join(f"{sim_mat[i,j]:+.3f}" for j in range(len(names)))
         print(row)
 
-    # ------------------------------------------------------------------
-    # Save
-    # ------------------------------------------------------------------
     out_path = VECTORS_DIR / f"sae_alignment_layer{args.layer}.json"
     serialisable = {
         e: [{"feature": fi, "cosine_sim": cs} for fi, cs in pairs]

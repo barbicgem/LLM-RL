@@ -123,6 +123,8 @@ NEUTRAL_DIR = DATA_DIR / "neutral"
 VECTORS_DIR = DATA_DIR / "vectors"
 
 # Gemma Scope 2 SAE for Gemma-3-12B residual stream.
-# Verify exact release name at: https://huggingface.co/collections/google/gemma-scope-2
-SAE_RELEASE = "gemma-scope-12b-it-res"
-SAE_ID = f"layer_{TARGET_LAYER}/width_16k/canonical"
+# Loaded directly from HuggingFace — not in sae_lens registry.
+SAE_HF_REPO = "google/gemma-scope-2-12b-it"
+SAE_HOOK = "resid_post_all"
+SAE_WIDTH = "16k"
+SAE_VARIANT = "l0_big"

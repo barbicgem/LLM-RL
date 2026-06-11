@@ -58,9 +58,9 @@ def load_sae_decoder(repo_id: str, hook: str, layer: int, width: str, variant: s
 
     with safe_open(params_path, framework="pt", device="cpu") as f:
         keys = list(f.keys())
-        w_dec_key = next((k for k in keys if k.endswith("W_dec") or k == "W_dec"), None)
+        w_dec_key = next((k for k in keys if k.lower() == "w_dec"), None)
         if w_dec_key is None:
-            raise ValueError(f"W_dec not found in safetensors. Available keys: {keys[:20]}")
+            raise ValueError(f"w_dec not found in safetensors. Available keys: {keys}")
         W_dec = f.get_tensor(w_dec_key).float().numpy()   # (n_features, d_model)
 
     return W_dec, cfg

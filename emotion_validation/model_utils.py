@@ -17,9 +17,13 @@ def load_model_and_tokenizer(model_id: str, device: str = "cuda"):
 
 
 def _get_layer(model, layer: int):
-    # Gemma-3 loads as Gemma3ForConditionalGeneration with a nested language_model
+    # Gemma-3 loads as Gemma3ForConditionalGeneration; language_model is Gemma3TextModel
+    # which has .layers directly (no intermediate .model wrapper)
     if hasattr(model, "language_model"):
-        return model.language_model.model.layers[layer]
+        lm = model.language_model
+        if hasattr(lm, "layers"):
+            return lm.layers[layer]
+        return lm.model.layers[layer]
     return model.model.layers[layer]
 
 

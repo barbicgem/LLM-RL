@@ -8,8 +8,8 @@ def load_model_and_tokenizer(model_id: str, device: str = "cuda"):
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
-        torch_dtype=torch.bfloat16,
-        device_map=device,
+        load_in_8bit=True,
+        device_map="auto",
     )
     model.eval()
     return model, tokenizer

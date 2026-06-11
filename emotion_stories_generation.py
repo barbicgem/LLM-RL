@@ -219,8 +219,8 @@ def main() -> None:
     pipe = pipeline(
         "text-generation",
         model=MODEL_ID,
-        torch_dtype=torch.bfloat16,
-        device_map=args.device,
+        load_in_8bit=True,
+        device_map="auto",
     )
 
     if args.mode in ("stories", "all"):

@@ -218,6 +218,7 @@ def main() -> None:
         load_format="bitsandbytes",
         gpu_memory_utilization=0.90,
         max_model_len=2048,
+        enforce_eager=True,
     )
     sampling_params = SamplingParams(temperature=0.8, max_tokens=MAX_NEW_TOKENS)
 

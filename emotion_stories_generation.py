@@ -19,9 +19,8 @@ import re
 import sys
 from pathlib import Path
 
-import torch
 from tqdm import tqdm
-from transformers import pipeline
+from transformers import BitsAndBytesConfig, pipeline
 
 from emotion_validation.config import (
     EMOTIONS,
@@ -219,7 +218,7 @@ def main() -> None:
     pipe = pipeline(
         "text-generation",
         model=MODEL_ID,
-        load_in_8bit=True,
+        model_kwargs={"quantization_config": BitsAndBytesConfig(load_in_8bit=True)},
         device_map="auto",
     )
 

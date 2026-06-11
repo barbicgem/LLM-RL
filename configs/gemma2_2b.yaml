@@ -1,0 +1,22 @@
+model:
+  name: google/gemma-2-2b
+  model_dim: 2304
+  target_layer: 20
+  hook_point: hook_resid_post  # TransformerLens hook name at layer 20
+
+sae:
+  release: gemma-scope-2b-pt-res-canonical
+  id: layer_20/width_16k/canonical
+
+steering:
+  prompt: "Human: How does he feel?\nAssistant: He feels"
+  strength: 0.5 
+  top_k_features: 10
+
+emotions:
+  desperate:
+    candidate_words: [desperate, hopeless, despairing]
+  calm:
+    candidate_words: [calm, peaceful, serene]
+  anxious:
+    candidate_words: [anxious, nervous, worried]

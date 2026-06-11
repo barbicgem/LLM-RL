@@ -58,6 +58,14 @@ def load_texts(jsonl_path: Path) -> list[str]:
 # Activation extraction
 # ---------------------------------------------------------------------------
 
+def _filter_finite(acts: np.ndarray, desc: str = "") -> np.ndarray:
+    mask = np.isfinite(acts).all(axis=1)
+    n_bad = (~mask).sum()
+    if n_bad:
+        tqdm.write(f"  [{desc}] dropped {n_bad} non-finite vectors")
+    return acts[mask]
+
+
 def extract_activations(
     model,
     tokenizer,
@@ -77,7 +85,8 @@ def extract_activations(
             skipped += 1
     if skipped:
         tqdm.write(f"  [{desc}] skipped {skipped} texts shorter than {token_offset} tokens")
-    return np.array(acts, dtype=np.float32)
+    arr = np.array(acts, dtype=np.float32)
+    return _filter_finite(arr, desc)
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +157,7 @@ def main() -> None:
     for emotion in args.emotions:
         cache_path = cache_dir / f"{emotion}_layer{args.layer}.npy"
         if cache_path.exists():
-            emotion_acts[emotion] = np.load(cache_path)
+            emotion_acts[emotion] = _filter_finite(np.load(cache_path), emotion)
             print(f"  {emotion}: {len(emotion_acts[emotion])} vectors (cached)")
             continue
 
@@ -180,7 +189,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     neutral_cache = cache_dir / f"neutral_layer{args.layer}.npy"
     if neutral_cache.exists():
-        neutral_acts = np.load(neutral_cache)
+        neutral_acts = _filter_finite(np.load(neutral_cache), "neutral")
         print(f"\nNeutral: {len(neutral_acts)} vectors (cached)")
     else:
         neutral_path = NEUTRAL_DIR / "neutral.jsonl"

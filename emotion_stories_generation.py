@@ -118,14 +118,18 @@ CRITICAL REQUIREMENT: These dialogues must be completely neutral and emotionless
 - Focus purely on information exchange and task completion"""
 
 
+BATCH_SIZE = 4
+MAX_NEW_TOKENS = 800
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _call(pipe, prompt: str, max_new_tokens: int = 2048) -> str:
-    messages = [{"role": "user", "content": prompt}]
-    result = pipe(messages, max_new_tokens=max_new_tokens, do_sample=True, temperature=0.8)
-    return result[0]["generated_text"][-1]["content"]
+def _call_batch(pipe, prompts: list[str]) -> list[str]:
+    """Run a batch of prompts through the pipeline, return list of response strings."""
+    batch = [[{"role": "user", "content": p}] for p in prompts]
+    results = pipe(batch, max_new_tokens=MAX_NEW_TOKENS, do_sample=True, temperature=0.8)
+    return [r[0]["generated_text"][-1]["content"] for r in results]
 
 
 def _parse_items(text: str, tag: str) -> list[str]:
@@ -148,22 +152,6 @@ def _done_indices(path: Path) -> set[int]:
 
 
 # ---------------------------------------------------------------------------
-# Generation functions
-# ---------------------------------------------------------------------------
-
-def generate_stories(pipe, emotion: str, topic: str, n: int) -> list[str]:
-    raw = _call(pipe, _STORY_PROMPT.format(n=n, topic=topic, emotion=emotion))
-    return _parse_items(raw, "story")
-
-
-def generate_neutral_dialogues(pipe, topic: str, n: int) -> list[str]:
-    raw = _call(pipe, _NEUTRAL_PROMPT.format(n=n, topic=topic))
-    items = _parse_items(raw, "dialogue")
-    # Post-hoc label conversion per paper
-    return [d.replace("Person:", "Human:").replace("\nAI:", "\nAssistant:") for d in items]
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -177,13 +165,19 @@ def run_stories(pipe, emotions: list[str], n: int) -> None:
             print(f"  {emotion}: already complete")
             continue
         with open(out_path, "a") as f:
-            for topic_idx, topic in tqdm(remaining, desc=f"stories/{emotion}"):
+            batches = [remaining[i:i + BATCH_SIZE] for i in range(0, len(remaining), BATCH_SIZE)]
+            for batch in tqdm(batches, desc=f"stories/{emotion}"):
+                prompts = [_STORY_PROMPT.format(n=n, topic=topic, emotion=emotion)
+                           for _, topic in batch]
                 try:
-                    items = generate_stories(pipe, emotion, topic, n)
-                    f.write(json.dumps({"topic_idx": topic_idx, "topic": topic, "items": items}) + "\n")
+                    responses = _call_batch(pipe, prompts)
+                    for (topic_idx, topic), response in zip(batch, responses):
+                        items = _parse_items(response, "story")
+                        f.write(json.dumps({"topic_idx": topic_idx, "topic": topic, "items": items}) + "\n")
                     f.flush()
                 except Exception as e:
-                    print(f"\n  [warn] {emotion} topic {topic_idx}: {e}", file=sys.stderr)
+                    for topic_idx, _ in batch:
+                        print(f"\n  [warn] {emotion} topic {topic_idx}: {e}", file=sys.stderr)
 
 
 def run_neutral(pipe, n: int) -> None:
@@ -195,13 +189,19 @@ def run_neutral(pipe, n: int) -> None:
         print("  neutral: already complete")
         return
     with open(out_path, "a") as f:
-        for topic_idx, topic in tqdm(remaining, desc="neutral"):
+        batches = [remaining[i:i + BATCH_SIZE] for i in range(0, len(remaining), BATCH_SIZE)]
+        for batch in tqdm(batches, desc="neutral"):
+            prompts = [_NEUTRAL_PROMPT.format(n=n, topic=topic) for _, topic in batch]
             try:
-                items = generate_neutral_dialogues(pipe, topic, n)
-                f.write(json.dumps({"topic_idx": topic_idx, "topic": topic, "items": items}) + "\n")
+                responses = _call_batch(pipe, prompts)
+                for (topic_idx, topic), response in zip(batch, responses):
+                    items = _parse_items(response, "dialogue")
+                    items = [d.replace("Person:", "Human:").replace("\nAI:", "\nAssistant:") for d in items]
+                    f.write(json.dumps({"topic_idx": topic_idx, "topic": topic, "items": items}) + "\n")
                 f.flush()
             except Exception as e:
-                print(f"\n  [warn] neutral topic {topic_idx}: {e}", file=sys.stderr)
+                for topic_idx, _ in batch:
+                    print(f"\n  [warn] neutral topic {topic_idx}: {e}", file=sys.stderr)
 
 
 def main() -> None:

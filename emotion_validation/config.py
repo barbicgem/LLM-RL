@@ -112,8 +112,8 @@ TOPICS = [
 
 assert len(TOPICS) == 100, f"Expected 100 topics, got {len(TOPICS)}"
 
-MODEL_ID = "google/gemma-3-12b-it"
-TARGET_LAYER = 30       # ~2/3 through the 46-layer model
+MODEL_ID = "google/gemma-3-4b-it"
+TARGET_LAYER = 20       # ~mid-upper of the ~34-layer 4B model; sweep via --layer
 N_STORIES_PER_TOPIC = 5
 TOKEN_OFFSET = 50       # average residual stream from this token onward
 
@@ -122,9 +122,9 @@ STORIES_DIR = DATA_DIR / "stories"
 NEUTRAL_DIR = DATA_DIR / "neutral"
 VECTORS_DIR = DATA_DIR / "vectors"
 
-# Gemma Scope 2 SAE for Gemma-3-12B residual stream.
+# Gemma Scope 2 SAE for Gemma-3-4B residual stream.
 # Loaded directly from HuggingFace — not in sae_lens registry.
-SAE_HF_REPO = "google/gemma-scope-2-12b-it"
+SAE_HF_REPO = "google/gemma-scope-2-4b-it"
 SAE_HOOK = "resid_post_all"
 SAE_WIDTH = "16k"
 SAE_VARIANT = "l0_big"

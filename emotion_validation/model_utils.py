@@ -1,20 +1,17 @@
 from typing import Optional
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 def load_model_and_tokenizer(model_id: str, device: str = "cuda"):
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_use_double_quant=True,
-    )
+    # Unquantized bf16. gemma-3-4b (~8-9 GB) fits on a single 24 GB A10G with room.
+    # Quantization is what pushed the BOS-token activation over into inf, which the
+    # attention sink then spread to every position as NaN; full bf16 keeps it finite.
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
-        quantization_config=bnb_config,
+        torch_dtype=torch.bfloat16,
         device_map="auto",
     )
     model.eval()

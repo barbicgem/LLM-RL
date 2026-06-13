@@ -19,14 +19,21 @@ def load_model_and_tokenizer(model_id: str, device: str = "cuda"):
 
 
 def _get_layer(model, layer: int):
-    # Gemma-3 loads as Gemma3ForConditionalGeneration; language_model is Gemma3TextModel
-    # which has .layers directly (no intermediate .model wrapper)
-    if hasattr(model, "language_model"):
-        lm = model.language_model
-        if hasattr(lm, "layers"):
-            return lm.layers[layer]
-        return lm.model.layers[layer]
-    return model.model.layers[layer]
+    # Locate the decoder layer list. The path varies by transformers version and
+    # whether Gemma-3 loaded as the multimodal Gemma3ForConditionalGeneration
+    # (layers under model.model.language_model) or a plain text causal LM.
+    candidates = (
+        lambda m: m.language_model.layers,         # text model exposed directly
+        lambda m: m.model.language_model.layers,   # Gemma3ForConditionalGeneration -> Gemma3Model -> text
+        lambda m: m.model.layers,                  # plain causal LM
+        lambda m: m.layers,                        # bare decoder
+    )
+    for get in candidates:
+        try:
+            return get(model)[layer]
+        except (AttributeError, TypeError, IndexError):
+            continue
+    raise AttributeError("Could not locate decoder layers on this model structure")
 
 
 def get_story_activation(

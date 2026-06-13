@@ -22,7 +22,11 @@ import torch
 
 from emotion_validation.config import MODEL_ID, TARGET_LAYER, VECTORS_DIR
 from emotion_validation.inject import inject, load_unit_vectors, resolve_layer
-from emotion_validation.introspection_data import INTENSITY_FRACTIONS
+from emotion_validation.introspection_data import (
+    HELD_OUT_EMOTIONS,
+    INTENSITY_FRACTIONS,
+    TRAIN_EMOTIONS,
+)
 from emotion_validation.model_utils import load_model_and_tokenizer
 
 EMOTION_KEYWORDS = {
@@ -44,6 +48,13 @@ EMOTION_KEYWORDS = {
 def classify(text: str) -> set[str]:
     t = text.lower()
     return {e for e, kws in EMOTION_KEYWORDS.items() if any(k in t for k in kws)}
+
+
+POSITIVE_EMOTIONS = {"excited", "happy", "curious", "calm", "content", "relieved"}
+
+
+def valence(e: str) -> str:
+    return "pos" if e in POSITIVE_EMOTIONS else "neg"
 
 
 @torch.no_grad()
@@ -90,6 +101,14 @@ def main() -> None:
     fracs = meta["intensity_fractions"]
     ascale = meta["alpha_scale"]
 
+    # Nearest trained emotion to each held-out emotion (Phase 1 cosine), for soft scoring.
+    nearest_trained = {}
+    for he in HELD_OUT_EMOTIONS:
+        if he in unit_vecs:
+            sims = {te: float(unit_vecs[he] @ unit_vecs[te])
+                    for te in TRAIN_EMOTIONS if te in unit_vecs}
+            nearest_trained[he] = max(sims, key=sims.get) if sims else None
+
     records = [json.loads(l) for l in open(args.data)]
     if args.max_records:
         records = records[: args.max_records]
@@ -98,7 +117,9 @@ def main() -> None:
     hit = defaultdict(int); tot = defaultdict(int)            # by ("trained"/"held_out")
     cal_hit = defaultdict(int); cal_tot = defaultdict(int)    # by intensity
     ctrl_fp = 0; ctrl_n = 0
+    ho_exact = ho_nn = ho_val = ho_n = 0                      # held-out soft scoring
     samples = []
+    all_preds = []
 
     for i, r in enumerate(records):
         emo, inten = r["emotion"], r["intensity"]
@@ -119,7 +140,15 @@ def main() -> None:
             correct = emo in mentioned
             tot[grp] += 1; hit[grp] += int(correct)
             cal_tot[inten] += 1; cal_hit[inten] += int(correct)
+            if grp == "held_out":
+                ho_n += 1
+                ho_exact += int(correct)
+                ho_nn += int(nearest_trained.get(emo) in mentioned)
+                ho_val += int(any(valence(m) == valence(emo) for m in mentioned))
 
+        all_preds.append({"emotion": emo, "intensity": inten,
+                          "held_out": bool(r.get("held_out")), "report": report,
+                          "mentioned": sorted(mentioned)})
         if i < 12:
             samples.append({"emotion": emo, "intensity": inten, "report": report,
                             "mentioned": sorted(mentioned)})
@@ -137,6 +166,12 @@ def main() -> None:
     for lvl in ("faint", "moderate", "strong"):
         print(f"  {lvl:8s}: {pct(cal_hit[lvl], cal_tot[lvl]):5.1f}%  ({cal_hit[lvl]}/{cal_tot[lvl]})")
 
+    print("\nheld-out soft scoring (same model, different metric):")
+    print(f"  exact label:       {pct(ho_exact, ho_n):5.1f}%  ({ho_exact}/{ho_n})")
+    print(f"  nearest-neighbor:  {pct(ho_nn, ho_n):5.1f}%  ({ho_nn}/{ho_n})")
+    print(f"  valence-correct:   {pct(ho_val, ho_n):5.1f}%  ({ho_val}/{ho_n})")
+    print(f"  nearest-trained map: {nearest_trained}")
+
     print("\nsample reports:")
     for s in samples:
         print(f"  [{s['emotion']}/{s['intensity']}] -> {s['report'][:120]}  (saw: {s['mentioned']})")
@@ -145,7 +180,10 @@ def main() -> None:
         "report_accuracy": {g: {"hit": hit[g], "total": tot[g]} for g in ("trained", "held_out")},
         "control_fpr": {"fp": ctrl_fp, "total": ctrl_n},
         "calibration": {l: {"hit": cal_hit[l], "total": cal_tot[l]} for l in ("faint", "moderate", "strong")},
+        "held_out_soft": {"exact": ho_exact, "nearest_neighbor": ho_nn, "valence": ho_val,
+                          "total": ho_n, "nearest_trained": nearest_trained},
         "samples": samples,
+        "predictions": all_preds,
         "meta": meta,
     }
     out_path = VECTORS_DIR / f"introspection_eval_layer{layer}.json"

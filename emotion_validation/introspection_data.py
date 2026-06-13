@@ -20,8 +20,9 @@ TRAIN_EMOTIONS = [e for e in EMOTIONS if e not in HELD_OUT_EMOTIONS]
 
 # Injection strength per intensity level, as a FRACTION of the residual-stream
 # norm at the target layer (see inject.estimate_residual_norm). "none" = control.
-# These are starting values — run sanity_injection.py to calibrate.
-INTENSITY_FRACTIONS = {"none": 0.0, "faint": 0.25, "moderate": 0.5, "strong": 1.0}
+# Calibrated via sanity_injection.py: the coherent-and-emotional band for
+# gemma-3-4b at layer 20 is ~0.08-0.16; it loops/degenerates above ~0.2.
+INTENSITY_FRACTIONS = {"none": 0.0, "faint": 0.05, "moderate": 0.10, "strong": 0.15}
 INJECTED_LEVELS = ["faint", "moderate", "strong"]
 
 # Fraction of the dataset that should be controls (alpha=0). Load-bearing: without

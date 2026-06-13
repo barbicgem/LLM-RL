@@ -48,12 +48,17 @@ def load_unit_vectors(npz_path, device="cuda", dtype=torch.float32) -> dict[str,
 
 
 @torch.no_grad()
-def estimate_residual_norm(model, tokenizer, layer, texts, token_offset=0, device="cuda") -> float:
-    """Mean L2 norm of the residual stream at ``layer`` over ``texts``.
+def estimate_residual_norm(model, tokenizer, layer, texts, skip_tokens=1, device="cuda") -> float:
+    """Median per-token L2 norm of the residual stream at ``layer`` over ``texts``.
 
     Injection strength is expressed as a fraction of this, so the perturbation is
     scaled to the model's natural activation magnitude rather than an arbitrary
     absolute number.
+
+    We skip the first ``skip_tokens`` positions (the BOS token carries a massive
+    outlier activation in Gemma-3 that would inflate the estimate) and use the
+    median, which is robust to any remaining attention-sink / massive-activation
+    tokens.
     """
     module = resolve_layer(model, layer)
     captured: dict[str, torch.Tensor] = {}
@@ -62,16 +67,18 @@ def estimate_residual_norm(model, tokenizer, layer, texts, token_offset=0, devic
         captured["h"] = (output[0] if isinstance(output, tuple) else output).detach()
 
     handle = module.register_forward_hook(hook)
-    norms = []
+    norms: list[float] = []
     try:
         for text in texts:
             inputs = tokenizer(text, return_tensors="pt").to(device)
             model(**inputs)
-            h = captured["h"][0, token_offset:, :].float()      # (seq, d_model)
-            norms.append(h.norm(dim=-1).mean().item())
+            h = captured["h"][0, skip_tokens:, :].float()       # (seq', d_model)
+            if h.shape[0] == 0:
+                continue
+            norms.extend(h.norm(dim=-1).tolist())
     finally:
         handle.remove()
-    return float(np.mean(norms)) if norms else 0.0
+    return float(np.median(norms)) if norms else 0.0
 
 
 @contextmanager

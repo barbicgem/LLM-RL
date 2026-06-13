@@ -43,10 +43,11 @@ class IntrospectionDataset(Dataset):
 
     def __getitem__(self, i):
         r = self.records[i]
-        prompt_ids = self.tok.apply_chat_template(
+        templated = self.tok.apply_chat_template(
             [{"role": "user", "content": r["prompt"]}],
             add_generation_prompt=True, tokenize=True,
         )
+        prompt_ids = templated if isinstance(templated, list) else templated["input_ids"]
         target_ids = self.tok(r["target"], add_special_tokens=False)["input_ids"]
         target_ids = target_ids + [self.tok.eos_token_id]
         input_ids = prompt_ids + target_ids

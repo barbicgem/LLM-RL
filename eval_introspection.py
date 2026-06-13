@@ -48,13 +48,15 @@ def classify(text: str) -> set[str]:
 
 @torch.no_grad()
 def generate_report(model, tokenizer, layer_module, prompt, addition, device, max_new_tokens):
-    ids = tokenizer.apply_chat_template(
+    enc = tokenizer.apply_chat_template(
         [{"role": "user", "content": prompt}], add_generation_prompt=True,
-        tokenize=True, return_tensors="pt",
-    ).to(device)
+        tokenize=True, return_tensors="pt", return_dict=True,
+    )
+    enc = {k: v.to(device) for k, v in enc.items()}
+    prompt_len = enc["input_ids"].shape[1]
     with inject(layer_module, addition):
-        out = model.generate(input_ids=ids, max_new_tokens=max_new_tokens, do_sample=False)
-    return tokenizer.decode(out[0, ids.shape[1]:], skip_special_tokens=True).strip()
+        out = model.generate(**enc, max_new_tokens=max_new_tokens, do_sample=False)
+    return tokenizer.decode(out[0, prompt_len:], skip_special_tokens=True).strip()
 
 
 def main() -> None:

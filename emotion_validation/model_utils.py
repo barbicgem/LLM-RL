@@ -57,9 +57,12 @@ def get_story_activation(
     captured: list[torch.Tensor] = []
 
     def _hook(_module, _input, output):
-        # output[0]: (batch=1, seq_len, d_model) bfloat16
-        hidden = output[0][0, token_offset:, :].detach().float()
-        captured.append(hidden.mean(dim=0).cpu())
+        # Newer transformers return the hidden-states tensor directly; older
+        # versions return a tuple (hidden_states, ...). Handle both.
+        hidden = output[0] if isinstance(output, tuple) else output
+        # hidden: (batch=1, seq_len, d_model)
+        h = hidden[0, token_offset:, :].detach().float()
+        captured.append(h.mean(dim=0).cpu())
 
     handle = _get_layer(model, layer).register_forward_hook(_hook)
     with torch.no_grad():

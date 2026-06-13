@@ -59,10 +59,14 @@ def load_texts(jsonl_path: Path) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def _filter_finite(acts: np.ndarray, desc: str = "") -> np.ndarray:
+    n_total = len(acts)
     mask = np.isfinite(acts).all(axis=1)
-    n_bad = (~mask).sum()
-    if n_bad:
-        tqdm.write(f"  [{desc}] dropped {n_bad} non-finite vectors")
+    n_bad = int((~mask).sum())
+    pct = (100.0 * n_bad / n_total) if n_total else 0.0
+    # Always log the rate (even 0%): a non-zero, emotion-varying drop rate is a
+    # symptom of magnitude-correlated overflow censoring (fp16 int8 path). With
+    # 4-bit NF4 + bf16 compute this should be ~0%.
+    tqdm.write(f"  [{desc}] non-finite dropped: {n_bad}/{n_total} ({pct:.1f}%)")
     return acts[mask]
 
 
